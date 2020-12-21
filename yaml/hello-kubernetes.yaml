@@ -1,21 +1,61 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: readiness-scripts
+data:
+  port: "8080"
+
+  readiness-0.sh: |
+    status=$(curl -I http://hello-kubernetes-1.hello-kubernetes-headless:8080 2>/dev/null | head -n 1 | cut -d$' ' -f2)
+    if [[ "$status" == "200" ]]; then
+      exit 1
+    else
+      exit 0
+    fi
+
+  readiness-1.sh: |
+    status=$(curl -I http://hello-kubernetes-0.hello-kubernetes-headless:8080 2>/dev/null | head -n 1 | cut -d$' ' -f2)
+    if [[ "$status" == "200" ]]; then
+      exit 1
+    else
+      exit 0
+    fi
+
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: hello-kubernetes
 spec:
-  type: LoadBalancer
+  type: NodePort
   ports:
   - port: 80
     targetPort: 8080
   selector:
     app: hello-kubernetes
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-kubernetes-headless
+spec:
+  clusterIP: None
+  ports:
+  - port: 8080
+    targetPort: 8080
+  selector:
+    app: hello-kubernetes
+
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: hello-kubernetes
 spec:
-  replicas: 3
+  replicas: 2
+  serviceName: hello-kubernetes-headless
   selector:
     matchLabels:
       app: hello-kubernetes
@@ -24,8 +64,55 @@ spec:
       labels:
         app: hello-kubernetes
     spec:
+      volumes:
+      - name: readiness
+        emptyDir: {}
+      - name: config-map
+        configMap:
+          name: readiness-scripts 
+      initContainers:
+      - name: init-readiness
+        image: bash
+        command:
+        - bash
+        - "-c"
+        - |
+          set -ex
+          
+          [[ `hostname` =~ -([0-9]+)$ ]] || exit 1
+          ordinal=${BASH_REMATCH[1]}
+          
+          cp /mnt/config-map/readiness-${ordinal}.sh /mnt/health/readiness.sh
+          
+          #if [[ $ordinal -eq 0 ]]; then
+          #  cp /mnt/config-map/readiness-0.sh /mnt/health/readiness.sh
+          #elif [[ $ordinal -eq 1 ]]; then
+          #  cp /mnt/config-map/readiness-1.sh /mnt/health/readiness.sh
+          #fi
+        volumeMounts:
+        - name: readiness
+          mountPath: "/mnt/health"
+        - name: config-map
+          mountPath: /mnt/config-map
+
       containers:
-      - name: hello-kubernetes
-        image: paulbouwer/hello-kubernetes:1.8
+      - volumeMounts:
+        - name: readiness
+          mountPath: "/mnt/health/"
+        name: hello-kubernetes
+        image: hello-kubernetes
+        imagePullPolicy: Never
         ports:
         - containerPort: 8080
+        # livenessProbe:
+        #   exec:
+        #     command: ["./mnt/health/readiness.sh"]
+        #   initialDelaySeconds: 30
+        #   periodSeconds: 10
+        #   timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command: ["bash", "/mnt/health/readiness.sh"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          #timeoutSeconds: 1
