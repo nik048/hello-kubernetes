@@ -1,3 +1,8 @@
+#Changeset in fork
+
+The changes try to enable only one replica to be active at a time, and let other replica to be on standby.
+A kind of cheap HA hack
+
 # Hello Kubernetes!
 
 This container image can be deployed on a Kubernetes cluster. When accessed via a web browser on port `8080`, it will display:
